@@ -196,11 +196,6 @@ class JSONC
                     $result .= $char;
                     $state = ParserState::InString;
                     break;
-
-                default:
-                    // Should never reach here in trailing comma removal
-                    $result .= $char;
-                    break;
             }
 
             $i++;
