@@ -1,0 +1,51 @@
+{
+    "name": "otar/jsonc",
+    "description": "A production-ready PHP library for parsing JSONC (JSON with Comments) format with drop-in compatibility for json_decode()",
+    "type": "library",
+    "keywords": [
+        "json",
+        "jsonc",
+        "parser",
+        "comments",
+        "trailing-commas",
+        "config",
+        "configuration"
+    ],
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Otar Chekurishvili",
+            "email": "otar@hey.com",
+            "homepage": "https://otar.me"
+        }
+    ],
+    "require": {
+        "php": "^8.0"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.5 || ^10.0 || ^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Otar\\": "src/"
+        },
+        "files": [
+            "src/functions.php"
+        ]
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Otar\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test-coverage": "phpunit --coverage-html coverage"
+    },
+    "config": {
+        "sort-packages": true,
+        "optimize-autoloader": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
