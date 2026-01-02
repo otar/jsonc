@@ -28,13 +28,13 @@ class JSONC
      */
     public static function parse(string $jsonc): string
     {
+        // Remove null bytes for security
+        $jsonc = str_replace("\x00", '', $jsonc);
+
         // Strip UTF-8 BOM if present
         if (str_starts_with($jsonc, "\xEF\xBB\xBF")) {
             $jsonc = substr($jsonc, 3);
         }
-
-        // Remove null bytes for security
-        $jsonc = str_replace("\x00", '', $jsonc);
 
         // Pass 1: Remove comments
         $json = self::removeComments($jsonc);
