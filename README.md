@@ -12,9 +12,13 @@ A production-ready PHP library for parsing JSONC (JSON with Comments) format wit
 - **Trailing commas** in objects and arrays
 - **Drop-in replacement** for `json_decode()`
 - **Edge case handling**: Preserves strings with comment syntax, escaped characters, Unicode
+- **Security hardening**:
+  - UTF-8 BOM auto-detection and removal
+  - Null byte injection prevention
+  - Unclosed string/comment validation
 - **Error handling**: Uses native `json_last_error()` and `json_last_error_msg()`
 - **Zero dependencies**: Uses native PHP JSON extension
-- **Well tested**: 39 tests with 100% code coverage
+- **Well tested**: 60+ tests with 100% code coverage
 
 ## Installation
 
@@ -200,6 +204,81 @@ $data = JSONC::decode($jsonc, true);
 // Full Unicode support
 ```
 
+### BOM Files (Windows Compatibility)
+```php
+// Files with UTF-8 BOM parse seamlessly
+$jsonc = file_get_contents('windows-config.jsonc'); // Has BOM
+$data = JSONC::decode($jsonc, true);
+// BOM automatically stripped
+```
+
+### Unclosed Strings Detection
+```php
+$jsonc = '{"key": "unclosed string';
+$result = JSONC::decode($jsonc, true);
+// Returns null, sets json_last_error()
+```
+
+### Mixed Line Endings
+```php
+// Handles \n, \r, and \r\n in same file
+$jsonc = "{\n\"a\": 1,\r\n\"b\": 2,\r\"c\": 3\n}";
+$data = JSONC::decode($jsonc, true);
+// Parses correctly
+```
+
+## Security Features
+
+The library includes several security hardening features to prevent common attack vectors:
+
+### BOM Handling
+
+Automatically detects and strips UTF-8 Byte Order Mark (BOM):
+
+```php
+// Files saved with BOM (common in Windows) parse correctly
+$jsonc = "\xEF\xBB\xBF{\"key\": \"value\"}";
+$data = JSONC::decode($jsonc, true);
+// Works seamlessly
+```
+
+### Null Byte Injection Prevention
+
+Removes null bytes from input to prevent truncation attacks:
+
+```php
+// Malicious input with null byte
+$jsonc = "{\"key\": \"val\x00ue\"}";
+$data = JSONC::decode($jsonc, true);
+// Returns: ['key' => 'value'] - null byte stripped
+```
+
+### Unclosed String/Comment Detection
+
+Validates that all strings and comments are properly closed:
+
+```php
+// Unclosed string
+$jsonc = '{"key": "value without closing quote';
+$result = JSONC::decode($jsonc, true);
+// Returns: null (with json_last_error() set)
+
+// Unclosed comment
+$jsonc = '{"key": "value" /* unclosed comment';
+$result = JSONC::decode($jsonc, true);
+// Returns: null (prevents silent data loss)
+```
+
+### State Machine Validation
+
+The parser validates it ends in a safe state, catching:
+- Unclosed strings
+- Unclosed escape sequences (`\"` at EOF)
+- Unclosed multi-line comments
+- Invalid state transitions
+
+This prevents silent truncation and ensures all malformed input is properly rejected.
+
 ## Real-World Examples
 
 ### TypeScript Config (tsconfig.json)
@@ -267,17 +346,24 @@ composer test-coverage
 
 ## How It Works
 
-The library uses a two-pass state-machine approach:
+The library uses a multi-pass state-machine approach:
+
+0. **Preprocessing: Security hardening**
+   - Strip UTF-8 BOM if present
+   - Remove null bytes for injection prevention
 
 1. **Pass 1: Remove comments** while preserving string content
    - Tracks parser state (Normal, InString, InStringEscape, SingleLineComment, MultiLineComment)
    - Only removes comment syntax outside of strings
+   - Validates parser ends in safe state (no unclosed strings/comments)
 
 2. **Pass 2: Remove trailing commas** while preserving string content
    - Identifies commas followed only by whitespace and closing brackets
    - Preserves commas inside strings
 
-3. **Pass 3: Delegate to native `json_decode()`** for actual parsing
+3. **Validation & Delegate to native `json_decode()`** for actual parsing
+   - State validation ensures proper closure of strings/comments
+   - Malformed input detected before reaching json_decode()
    - Errors automatically tracked via `json_last_error()`
 
 This approach ensures:
@@ -319,7 +405,7 @@ Contributions are welcome! Please ensure:
 - All tests pass (`composer test`)
 - Code follows PSR-12 standards
 - New features include comprehensive tests
-- Maintain 10% code coverage
+- Maintain 100% code coverage
 
 ## Credits
 
