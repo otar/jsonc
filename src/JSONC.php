@@ -28,6 +28,14 @@ class JSONC
      */
     public static function parse(string $jsonc): string
     {
+        // Strip UTF-8 BOM if present
+        if (str_starts_with($jsonc, "\xEF\xBB\xBF")) {
+            $jsonc = substr($jsonc, 3);
+        }
+
+        // Remove null bytes for security
+        $jsonc = str_replace("\x00", '', $jsonc);
+
         // Pass 1: Remove comments
         $json = self::removeComments($jsonc);
 
@@ -130,6 +138,14 @@ class JSONC
             }
 
             $i++;
+        }
+
+        // Validate that we ended in a valid state
+        // This catches unclosed strings, unclosed escape sequences and unclosed comments
+        // Note: This validation protects both removeComments() and removeTrailingCommas()
+        if ($state !== ParserState::Normal && $state !== ParserState::SingleLineComment) {
+            // Return invalid JSON that will fail in json_decode()
+            return '{JSONC_PARSE_ERROR: unclosed string or comment}';
         }
 
         return $result;
