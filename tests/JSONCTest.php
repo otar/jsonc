@@ -845,4 +845,631 @@ class JSONCTest extends TestCase
         $result = JSONC::decode('', true);
         $this->assertNull($result);
     }
+
+    /**
+     * Null byte before BOM (order of operations)
+     * The BOM check happens before null byte removal, so if there's a null byte
+     * before the BOM, the BOM won't be detected and will remain in the output.
+     */
+    public function testBugNullByteBeforeBOM(): void
+    {
+        $jsonc = "\x00\xEF\xBB\xBF{\"key\": \"value\"}";
+        $result = JSONC::decode($jsonc, true);
+
+        // If BOM is properly removed, this should parse correctly
+        // If BOM remains (bug), json_decode will likely fail
+        $this->assertNotNull($result, "Parser should handle null byte before BOM");
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Null byte in comment marker (creates comment after sanitization)
+     * If there's a null byte between the two slashes, it's not a comment before sanitization.
+     * After null removal, it becomes a comment, changing the parsing behavior.
+     */
+    public function testBugNullByteInCommentMarker(): void
+    {
+        // Null byte between slashes: "/" + "\x00" + "/" = not a comment initially
+        // After null removal: "//" = comment!
+        $jsonc = "{\"a\": 1}/\x00/ comment } {\"b\": 2}";
+        $result = JSONC::decode($jsonc, true);
+
+        // Expected: If bug exists, "comment } {\"b\": 2}" becomes a comment
+        // Result would be just {"a": 1} (invalid JSON - missing closing brace)
+        // If no bug: /\x00/ is kept, becomes //, making everything after it a comment
+
+        // This test verifies this behavior
+        if ($result !== null && isset($result['a'])) {
+            // Null byte turned non-comment into comment
+            $this->assertEquals(['a' => 1], $result);
+            $this->assertArrayNotHasKey('b', $result, "Second object should be commented out due to null byte creating comment marker");
+        } else {
+            $this->fail("Unexpected parsing result");
+        }
+    }
+
+    /**
+     * Null byte splitting multi-line comment start
+     */
+    public function testBugNullByteSplittingMultiLineCommentStart(): void
+    {
+        $jsonc = "{/\x00* not a comment */\"key\": \"value\"}";
+        $result = JSONC::decode($jsonc, true);
+
+        // After null removal: "{/* not a comment */\"key\": \"value\"}"
+        // The /* */ becomes a comment, removing " not a comment "
+        // Result: "{\"key\": \"value\"}"
+        $this->assertNotNull($result);
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Null byte splitting multi-line comment end
+     */
+    public function testBugNullByteSplittingMultiLineCommentEnd(): void
+    {
+        $jsonc = "{\"key\": \"value\"} /* comment *\x00/ still comment? */";
+        $result = JSONC::decode($jsonc, true);
+
+        // After null removal: "{\"key\": \"value\"} /* comment */ still comment? */"
+        // First */ closes the comment, " still comment? */" remains
+        // Invalid JSON after preprocessing
+        $this->assertNull($result, "Should produce invalid JSON");
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Multiple BOMs at start
+     */
+    public function testMultipleBOMsAtStart(): void
+    {
+        $jsonc = "\xEF\xBB\xBF\xEF\xBB\xBF{\"key\": \"value\"}";
+        $result = JSONC::decode($jsonc, true);
+
+        // Only first BOM should be stripped, second remains
+        // Second BOM (3 bytes) in JSON should cause parsing to fail
+        // unless json_decode() is tolerant of these bytes
+        if ($result === null) {
+            // Second BOM caused failure (expected)
+            $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+        } else {
+            // json_decode was tolerant - document this
+            $this->assertEquals(['key' => 'value'], $result);
+        }
+    }
+
+    /**
+     * Incomplete BOM sequence
+     */
+    public function testIncompleteBOM(): void
+    {
+        $jsonc = "\xEF\xBB{\"key\": \"value\"}";
+        $result = JSONC::decode($jsonc, true);
+
+        // Incomplete BOM (only 2 bytes) should not be recognized
+        // The bytes should remain and likely cause json_decode to fail
+        $this->assertNull($result, "Incomplete BOM should not be recognized");
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * BOM in middle of file (should not be stripped)
+     */
+    public function testBOMInMiddleOfFile(): void
+    {
+        $jsonc = "{\"a\": \"\xEF\xBB\xBF\", \"b\": 2}";
+        $result = JSONC::decode($jsonc, true);
+
+        // BOM bytes in string should be preserved
+        $this->assertNotNull($result);
+        $this->assertEquals("\xEF\xBB\xBF", $result['a']);
+        $this->assertEquals(2, $result['b']);
+    }
+
+    /**
+     * Escaped forward slash followed by slash
+     */
+    public function testStateMachineEscapedForwardSlashBeforeComment(): void
+    {
+        $jsonc = '{"url": "https:\/\//comment?"}';
+        $result = JSONC::decode($jsonc, true);
+
+        // The \/ is an escaped forward slash (valid in JSON)
+        // json_decode converts \/ to /, so \/\/ becomes ///
+        // All slashes are inside the string, NOT a comment marker
+        $this->assertNotNull($result);
+        $this->assertEquals('https:///comment?', $result['url']);
+    }
+
+    /**
+     * Escaped quote after backslash
+     */
+    public function testStateMachineEscapedQuoteAfterBackslash(): void
+    {
+        $jsonc = '{"test": "\\\\\""}';
+        $result = JSONC::decode($jsonc, true);
+
+        // Actual string (after PHP single-quote processing): {"test": "\\\""}
+        // Input: \\\" = 3 backslashes + 2 quotes
+        // First \\ = escaped backslash → adds one \ to result
+        // Second \  + " = escape sequence, adds \" to result (still in string)
+        // Third " = closes string
+        // Result: backslash + quote character
+        $this->assertNotNull($result);
+        $this->assertEquals('\\"', $result['test']);
+    }
+
+    /**
+     * Backslash-escaped forward slash in comment pattern
+     */
+    public function testStateMachineEscapedSlashInCommentPattern(): void
+    {
+        $jsonc = '{"test": "\\/* not a comment */"}';
+        $result = JSONC::decode($jsonc, true);
+
+        // \/* inside string should be preserved
+        $this->assertNotNull($result);
+        $this->assertStringContainsString('/*', $result['test']);
+    }
+
+    /**
+     * Space between * and / in multi-line comment
+     */
+    public function testStateMachineSpaceBetweenCommentClose(): void
+    {
+        $jsonc = '{"a": 1} /* comment * / still in comment */ {"b": 2}';
+        $result = JSONC::decode($jsonc, true);
+
+        // * followed by space and / should NOT close comment
+        // Comment continues until the real */
+        // After comment removal: {"a": 1}  {"b": 2}
+        // Two objects side-by-side = invalid JSON
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Nested comment-like pattern
+     */
+    public function testStateMachineNestedCommentPattern(): void
+    {
+        $jsonc = '/* outer /* inner */ after */{"key": "value"}';
+        $result = JSONC::decode($jsonc, true);
+
+        // First /* starts comment
+        // Second /* is just comment content
+        // First */ ends comment
+        // " after " remains as JSON content
+        // This should cause invalid JSON
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Slash-asterisk at comment start
+     */
+    public function testStateMachineSlashAsteriskCommentStart(): void
+    {
+        $jsonc = '/*/ pattern */{"key": "value"}';
+        $result = JSONC::decode($jsonc, true);
+
+        // /*/ starts a multi-line comment
+        // Comment content is: " pattern "
+        // */ closes it
+        // Valid JSON remains
+        $this->assertNotNull($result);
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Multiple consecutive slashes
+     */
+    public function testStateMachineMultipleSlashes(): void
+    {
+        $jsonc = '{"a": 1}/// triple slash comment';
+        $result = JSONC::decode($jsonc, true);
+
+        // First two // start single-line comment
+        // Third / is part of comment content
+        $this->assertNotNull($result);
+        $this->assertEquals(['a' => 1], $result);
+    }
+
+    /**
+     * Multiple asterisks before slash
+     */
+    public function testStateMachineMultipleAsterisks(): void
+    {
+        $jsonc = '/* comment ***/{"key": "value"}';
+        $result = JSONC::decode($jsonc, true);
+
+        // Multiple asterisks before /
+        // First */ should close the comment
+        $this->assertNotNull($result);
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Empty string key missing value after comment
+     */
+    public function testStateMachineEmptyStringKeyMissingValue(): void
+    {
+        $jsonc = '{"": // comment
+"key": "value"}';
+        $result = JSONC::decode($jsonc, true);
+
+        // After comment removal: {"": \n"key": "value"}
+        // Empty string key has no value! Invalid JSON
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Escaped quote in string value
+     */
+    public function testStateMachineEscapedQuoteInString(): void
+    {
+        $jsonc = '{"key": "value\\""}// comment';
+        $result = JSONC::decode($jsonc, true);
+
+        // "value\"" = value + escaped quote, then closing "
+        // The \\" is an escaped quote character (becomes " in decoded string)
+        // Then // comment is removed
+        $this->assertNotNull($result);
+        $this->assertEquals('value"', $result['key']);
+    }
+
+    /**
+     * Comment syntax as object key
+     */
+    public function testStateMachineCommentSyntaxAsObjectKey(): void
+    {
+        $jsonc = '{
+            "//": "single line marker",
+            "/*": "multi start",
+            "*/": "multi end",
+            "/**/": "empty comment"
+        }';
+        $result = JSONC::decode($jsonc, true);
+
+        // All comment syntax should work as keys when properly quoted
+        $this->assertNotNull($result);
+        $this->assertEquals('single line marker', $result['//']);
+        $this->assertEquals('multi start', $result['/*']);
+        $this->assertEquals('multi end', $result['*/']);
+        $this->assertEquals('empty comment', $result['/**/']);
+    }
+
+    /**
+     * Single slash at EOF
+     */
+    public function testStateMachineSingleSlashAtEOF(): void
+    {
+        $jsonc = '{"key": "value"}/';
+        $result = JSONC::decode($jsonc, true);
+
+        // Single slash at EOF - not a comment, just invalid JSON
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Slash followed by non-comment character
+     */
+    public function testStateMachineSlashNonComment(): void
+    {
+        $jsonc = '{"key": "value"}/x';
+        $result = JSONC::decode($jsonc, true);
+
+        // /x is not a comment marker, kept as-is
+        // Results in invalid JSON
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Asterisk without slash
+     */
+    public function testStateMachineAsteriskWithoutSlash(): void
+    {
+        $jsonc = '{"key": "value"} * test';
+        $result = JSONC::decode($jsonc, true);
+
+        // Lone asterisk - not a comment, invalid JSON
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Comment close without open
+     */
+    public function testStateMachineCloseWithoutOpen(): void
+    {
+        $jsonc = '{"key": "value"} */ test';
+        $result = JSONC::decode($jsonc, true);
+
+        // */ without /* - not a comment marker, invalid JSON
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Non-breaking space (U+00A0) after trailing comma
+     * This tests if Unicode whitespace is recognized in trailing comma detection
+     */
+    public function testUnicodeNonBreakingSpaceAfterComma(): void
+    {
+        // U+00A0 = non-breaking space (UTF-8: 0xC2 0xA0)
+        $jsonc = "{\"a\": 1,\xC2\xA0}";
+        $result = JSONC::decode($jsonc, true);
+
+        // isWhitespace() only checks for space, tab, \n, \r
+        // U+00A0 is NOT recognized, so comma is NOT removed
+        // Result: {"a": 1,<nbsp>} which is invalid JSON
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Line separator (U+2028) in single-line comment
+     */
+    public function testUnicodeLineSeparatorInComment(): void
+    {
+        // U+2028 = line separator (UTF-8: 0xE2 0x80 0xA8)
+        $jsonc = "{\"a\": 1} // comment\xE2\x80\xA8{\"b\": 2}";
+        $result = JSONC::decode($jsonc, true);
+
+        // U+2028 is NOT recognized as line terminator (only \n and \r are)
+        // Everything after // is treated as comment, including the second object
+        // After comment removal: {"a": 1}
+        $this->assertNotNull($result);
+        $this->assertEquals(['a' => 1], $result);
+        $this->assertArrayNotHasKey('b', $result);
+    }
+
+    /**
+     * Paragraph separator (U+2029) in single-line comment
+     */
+    public function testUnicodeParagraphSeparatorInComment(): void
+    {
+        // U+2029 = paragraph separator (UTF-8: 0xE2 0x80 0xA9)
+        $jsonc = "{\"a\": 1} // comment\xE2\x80\xA9{\"b\": 2}";
+        $result = JSONC::decode($jsonc, true);
+
+        // U+2029 is NOT recognized as line terminator
+        // Second object becomes part of comment
+        $this->assertNotNull($result);
+        $this->assertEquals(['a' => 1], $result);
+        $this->assertArrayNotHasKey('b', $result);
+    }
+
+    /**
+     * Zero-width space (U+200B) after trailing comma
+     */
+    public function testUnicodeZeroWidthSpaceAfterComma(): void
+    {
+        // U+200B = zero-width space (UTF-8: 0xE2 0x80 0x8B)
+        $jsonc = "{\"a\": 1,\xE2\x80\x8B}";
+        $result = JSONC::decode($jsonc, true);
+
+        // Zero-width space is NOT recognized as whitespace
+        // Comma is NOT removed, invalid JSON
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Form feed (\f / 0x0C) in single-line comment
+     */
+    public function testUnicodeFormFeedInComment(): void
+    {
+        $jsonc = "{\"a\": 1} // comment\x0C{\"b\": 2}";
+        $result = JSONC::decode($jsonc, true);
+
+        // Form feed (0x0C) is NOT recognized as line terminator
+        // Second object becomes part of comment
+        $this->assertNotNull($result);
+        $this->assertEquals(['a' => 1], $result);
+        $this->assertArrayNotHasKey('b', $result);
+    }
+
+    /**
+     * Vertical tab (\v / 0x0B) in single-line comment
+     */
+    public function testUnicodeVerticalTabInComment(): void
+    {
+        $jsonc = "{\"a\": 1} // comment\x0B{\"b\": 2}";
+        $result = JSONC::decode($jsonc, true);
+
+        // Vertical tab (0x0B) is NOT recognized as line terminator
+        // Second object becomes part of comment
+        $this->assertNotNull($result);
+        $this->assertEquals(['a' => 1], $result);
+        $this->assertArrayNotHasKey('b', $result);
+    }
+
+    /**
+     * Tab character after trailing comma (should work)
+     */
+    public function testUnicodeTabAfterTrailingComma(): void
+    {
+        $jsonc = "{\"a\": 1,\t}";
+        $result = JSONC::decode($jsonc, true);
+
+        // Tab IS recognized as whitespace
+        // Comma should be removed
+        $this->assertNotNull($result);
+        $this->assertEquals(['a' => 1], $result);
+    }
+
+    /**
+     * Multiple Unicode whitespace types after comma
+     */
+    public function testUnicodeMultipleWhitespaceAfterComma(): void
+    {
+        // Mix of regular space, nbsp, zero-width space
+        $jsonc = "{\"a\": 1, \xC2\xA0\xE2\x80\x8B}";
+        $result = JSONC::decode($jsonc, true);
+
+        // Only regular space is recognized
+        // When lookahead encounters nbsp, it stops and checks next char
+        // Next char is nbsp (not } or ]), so comma is kept
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * RTL override in comment
+     */
+    public function testUnicodeRTLOverrideInComment(): void
+    {
+        // U+202E = right-to-left override
+        $jsonc = "{\"key\": \"value\"} /* \xE2\x80\xAEtest */";
+        $result = JSONC::decode($jsonc, true);
+
+        // RTL override doesn't affect parsing (only visual)
+        // Comment is removed correctly
+        $this->assertNotNull($result);
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Combining characters in comment
+     */
+    public function testUnicodeCombiningCharsInComment(): void
+    {
+        // e + combining acute accent (U+0301)
+        $jsonc = "{\"key\": \"value\"} /* e\xCC\x81 */";
+        $result = JSONC::decode($jsonc, true);
+
+        // Combining characters don't affect parsing
+        $this->assertNotNull($result);
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Large whitespace after trailing comma
+     * Tests if lookahead accumulation causes performance issues
+     */
+    public function testPerformanceLargeWhitespaceAfterComma(): void
+    {
+        // 100KB of whitespace after trailing comma
+        $whitespace = str_repeat(" \t\n", (int)(100000 / 3));
+        $jsonc = "{\"a\": 1,{$whitespace}}";
+
+        $start = microtime(true);
+        $result = JSONC::decode($jsonc, true);
+        $duration = microtime(true) - $start;
+
+        // Should complete quickly (< 2 seconds)
+        $this->assertLessThan(2.0, $duration, "Parsing took too long: {$duration}s");
+
+        // Comma should be removed, whitespace preserved
+        $this->assertNotNull($result);
+        $this->assertEquals(['a' => 1], $result);
+    }
+
+    /**
+     * Huge single-line comment
+     */
+    public function testPerformanceHugeSingleLineComment(): void
+    {
+        // 1MB comment
+        $comment = str_repeat('x', 1000000);
+        $jsonc = "{\"a\": 1} // {$comment}";
+
+        $start = microtime(true);
+        $result = JSONC::decode($jsonc, true);
+        $duration = microtime(true) - $start;
+
+        // Should complete quickly despite large comment
+        $this->assertLessThan(1.0, $duration, "Parsing took too long: {$duration}s");
+
+        $this->assertNotNull($result);
+        $this->assertEquals(['a' => 1], $result);
+    }
+
+    /**
+     * Huge multi-line comment
+     */
+    public function testPerformanceHugeMultiLineComment(): void
+    {
+        // 1MB comment
+        $comment = str_repeat('x', 1000000);
+        $jsonc = "/* {$comment} */ {\"a\": 1}";
+
+        $start = microtime(true);
+        $result = JSONC::decode($jsonc, true);
+        $duration = microtime(true) - $start;
+
+        // Should complete in reasonable time (< 2 seconds)
+        $this->assertLessThan(2.0, $duration, "Parsing took too long: {$duration}s");
+
+        $this->assertNotNull($result);
+        $this->assertEquals(['a' => 1], $result);
+    }
+
+    /**
+     * Many trailing commas
+     */
+    public function testPerformanceManyTrailingCommas(): void
+    {
+        // 10,000 objects with trailing commas
+        $objects = [];
+        for ($i = 0; $i < 10000; $i++) {
+            $objects[] = "{\"x{$i}\": {$i},}";
+        }
+        $jsonc = '[' . implode(',', $objects) . ']';
+
+        $start = microtime(true);
+        $result = JSONC::decode($jsonc, true);
+        $duration = microtime(true) - $start;
+
+        // Should complete in reasonable time (< 2 seconds)
+        $this->assertLessThan(2.0, $duration, "Parsing took too long: {$duration}s");
+
+        $this->assertNotNull($result);
+        $this->assertCount(10000, $result);
+    }
+
+    /**
+     * Rapid state transitions
+     */
+    public function testPerformanceRapidStateTransitions(): void
+    {
+        // 10,000 alternating string/comment pairs with commas
+        $pattern = str_repeat('"",/**/', 10000);
+        $jsonc = "[{$pattern}null]"; // Add null at end to make valid JSON
+
+        $start = microtime(true);
+        $result = JSONC::decode($jsonc, true);
+        $duration = microtime(true) - $start;
+
+        // Should handle rapid state changes efficiently
+        $this->assertLessThan(2.0, $duration, "Parsing took too long: {$duration}s");
+
+        // After comment removal: ["","",...,null] = array of 10k empty strings + null
+        $this->assertNotNull($result);
+        $this->assertCount(10001, $result);
+    }
+
+    /**
+     * Very long string with no comments
+     */
+    public function testPerformanceVeryLongString(): void
+    {
+        // 1MB string value
+        $longString = str_repeat('a', 1000000);
+        $jsonc = "{\"key\": \"{$longString}\"}";
+
+        $start = microtime(true);
+        $result = JSONC::decode($jsonc, true);
+        $duration = microtime(true) - $start;
+
+        // Should handle long strings efficiently (< 2 seconds)
+        $this->assertLessThan(2.0, $duration, "Parsing took too long: {$duration}s");
+
+        $this->assertNotNull($result);
+        $this->assertEquals($longString, $result['key']);
+    }
 }

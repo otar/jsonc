@@ -18,7 +18,7 @@ A production-ready PHP library for parsing JSONC (JSON with Comments) format wit
   - Unclosed string/comment validation
 - **Error handling**: Uses native `json_last_error()` and `json_last_error_msg()`
 - **Zero dependencies**: Uses native PHP JSON extension
-- **Well tested**: 60+ tests with 100% code coverage
+- **Well tested**: 100+ tests with 100% code coverage
 
 ## Installation
 
