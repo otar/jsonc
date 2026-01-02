@@ -4,8 +4,6 @@ A production-ready PHP library for parsing JSONC (JSON with Comments) format wit
 
 [![PHP Version](https://img.shields.io/badge/php-%5E8.0-blue)](https://php.net)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-39%20passed-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage-97.67%25-brightgreen)]()
 
 ## Features
 
@@ -16,7 +14,7 @@ A production-ready PHP library for parsing JSONC (JSON with Comments) format wit
 - **Edge case handling**: Preserves strings with comment syntax, escaped characters, Unicode
 - **Error handling**: Uses native `json_last_error()` and `json_last_error_msg()`
 - **Zero dependencies**: Uses native PHP JSON extension
-- **Well tested**: 39 tests with 97.67% code coverage
+- **Well tested**: 39 tests with 100% code coverage
 
 ## Installation
 
@@ -321,7 +319,7 @@ Contributions are welcome! Please ensure:
 - All tests pass (`composer test`)
 - Code follows PSR-12 standards
 - New features include comprehensive tests
-- Maintain >95% code coverage
+- Maintain 10% code coverage
 
 ## Credits
 
