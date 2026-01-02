@@ -597,4 +597,252 @@ class JSONCTest extends TestCase
         $result = JSONC::decode($jsonc, true);
         $this->assertEquals('', $result['empty']);
     }
+
+    /**
+     * Odd number of backslashes before quote
+     */
+    public function testSecurityStringOddBackslashes(): void
+    {
+        // Valid: even backslashes
+        $jsonc = '{"path": "C:\\\\Users"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertNotNull($result);
+
+        // Invalid: odd backslashes (string never closes)
+        $jsonc = '{"key": "value\\"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertNull($result);
+        // Just verify there's an error, don't check specific code
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Unclosed multi-line comment
+     */
+    public function testSecurityCommentUnclosedMultiLine(): void
+    {
+        $jsonc = '{"key": "value" /* unclosed comment';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Unclosed string at EOF
+     */
+    public function testSecurityStringUnclosedAtEOF(): void
+    {
+        $jsonc = '{"key": "unclosed string';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * Null byte injection
+     */
+    public function testSecurityInputNullByteInjection(): void
+    {
+        $jsonc = "{\"key\": \"val\x00ue\"}";
+        $result = JSONC::decode($jsonc, true);
+        // Should strip null bytes and parse successfully
+        $this->assertNotNull($result);
+        $this->assertEquals('value', $result['key']);
+    }
+
+    /**
+     * Comments between key and value
+     */
+    public function testSecurityCommentBetweenKeyValue(): void
+    {
+        $jsonc = '{"key" /* comment */ : "value"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Escaped forward slash
+     */
+    public function testSecurityStringEscapedForwardSlash(): void
+    {
+        $jsonc = '{"url": "https:\/\/example.com"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['url' => 'https://example.com'], $result);
+    }
+
+    /**
+     * BOM (Byte Order Mark) handling
+     */
+    public function testSecurityInputBOMHandling(): void
+    {
+        $jsonc = "\xEF\xBB\xBF{\"key\": \"value\"}";
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Invalid UTF-8 sequences
+     */
+    public function testSecurityInputInvalidUTF8(): void
+    {
+        $jsonc = "{\"key\": \"val\xC0\xC1ue\"}";
+        $result = JSONC::decode($jsonc, true);
+        // Should handle gracefully - either parse or return null
+        // We don't enforce specific behavior, just no crash
+        $this->assertTrue($result === null || is_array($result));
+    }
+
+    /**
+     * DoS protection - very large input
+     */
+    public function testSecurityInputSizeLimit(): void
+    {
+        // Test with very large but reasonable input
+        $large = str_repeat('{"key": "value"},', 10000);
+        $jsonc = '[' . $large . '{}]';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertNotNull($result);
+    }
+
+    /**
+     * Nested comment syntax in strings
+     */
+    public function testSecurityStringNestedCommentSyntax(): void
+    {
+        $jsonc = '{"msg": "Use /* and */ for comments"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['msg' => 'Use /* and */ for comments'], $result);
+    }
+
+    /**
+     * Multiple consecutive backslashes
+     */
+    public function testSecurityStringMultipleBackslashes(): void
+    {
+        $jsonc = '{"path": "\\\\\\\\server"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['path' => '\\\\server'], $result);
+    }
+
+    /**
+     * Comment start after escape
+     */
+    public function testSecurityStringCommentStartAfterEscape(): void
+    {
+        $jsonc = '{"msg": "This is \\/* not a comment"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertNotNull($result);
+    }
+
+    /**
+     * Empty comment
+     */
+    public function testSecurityCommentEmpty(): void
+    {
+        $jsonc = '{/**/"key": "value"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Comment-only input
+     */
+    public function testSecurityCommentOnlyInput(): void
+    {
+        $jsonc = '// Just a comment';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertNull($result);
+    }
+
+    /**
+     * Trailing comma after comment
+     */
+    public function testSecurityTrailingCommaAfterComment(): void
+    {
+        $jsonc = '{"a": 1, // comment
+}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['a' => 1], $result);
+    }
+
+    /**
+     * Mixed line endings
+     */
+    public function testSecurityInputMixedLineEndings(): void
+    {
+        $jsonc = "{\n\"a\": 1,\r\n\"b\": 2,\r\"c\": 3\n}";
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['a' => 1, 'b' => 2, 'c' => 3], $result);
+    }
+
+    /**
+     * Very deep nesting
+     */
+    public function testSecurityInputVeryDeepNesting(): void
+    {
+        $deep = str_repeat('[', 100) . '1' . str_repeat(']', 100);
+        $result = JSONC::decode($deep, true, 200);
+        $this->assertNotNull($result);
+    }
+
+    /**
+     * Unicode in comments
+     */
+    public function testSecurityCommentUnicodeContent(): void
+    {
+        $jsonc = '{/* 你好 🚀 */"key": "value"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Backslash before comment
+     */
+    public function testSecurityBackslashBeforeComment(): void
+    {
+        $jsonc = '{"key": "value"}\\ // not in string';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertNull($result); // Invalid JSON
+    }
+
+    /**
+     * Control characters in strings
+     */
+    public function testSecurityStringControlCharacters(): void
+    {
+        $jsonc = '{"msg": "line1\\nline2\\ttab"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertStringContainsString("\n", $result['msg']);
+    }
+
+    /**
+     * Comment syntax as keys
+     */
+    public function testSecurityCommentSyntaxAsKeys(): void
+    {
+        $jsonc = '{"//": "value1", "/**/": "value2", "/": "value3", "*": "value4"}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['//' => 'value1', '/**/' => 'value2', '/' => 'value3', '*' => 'value4'], $result);
+    }
+
+    /**
+     * Multiple inline comments
+     */
+    public function testSecurityMultipleInlineComments(): void
+    {
+        $jsonc = '{
+  "key": /* comment1 */ /* comment2 */ "value"
+}';
+        $result = JSONC::decode($jsonc, true);
+        $this->assertEquals(['key' => 'value'], $result);
+    }
+
+    /**
+     * Empty input
+     */
+    public function testSecurityEmptyInput(): void
+    {
+        $result = JSONC::decode('', true);
+        $this->assertNull($result);
+    }
 }
