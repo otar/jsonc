@@ -107,14 +107,6 @@ if ($result === null && json_last_error() !== JSON_ERROR_NONE) {
 }
 ```
 
-Error codes are standard PHP JSON constants:
-- `JSON_ERROR_NONE` - No error
-- `JSON_ERROR_DEPTH` - Maximum stack depth exceeded
-- `JSON_ERROR_STATE_MISMATCH` - Invalid or malformed JSON
-- `JSON_ERROR_CTRL_CHAR` - Control character error
-- `JSON_ERROR_SYNTAX` - Syntax error
-- `JSON_ERROR_UTF8` - Malformed UTF-8 characters
-
 ## Requirements
 
 - PHP 8.0 or higher
@@ -140,6 +132,7 @@ Contributions are welcome! Please ensure all tests pass (`composer test`) and ma
 
 ## Credits & Related Projects
 
-Inspired by existing JSONC parsers. Related projects:
+Inspired by existing JSONC parsers and the need for a robust, production-ready PHP implementation with proper edge case handling.
+
 - [microsoft/node-jsonc-parser](https://github.com/microsoft/node-jsonc-parser) - Official JSONC parser for Node.js
 - [VS Code](https://code.visualstudio.com/) - Uses JSONC for configuration files
