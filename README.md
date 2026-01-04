@@ -2,6 +2,8 @@
 
 A production-ready PHP library for parsing JSONC (JSON with Comments) format with drop-in compatibility for `json_decode()`.
 
+[![CI](https://github.com/otar/jsonc/actions/workflows/ci.yml/badge.svg)](https://github.com/otar/jsonc/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/otar/jsonc/branch/main/graph/badge.svg)](https://codecov.io/gh/otar/jsonc)
 [![PHP Version](https://img.shields.io/badge/php-%5E8.0-blue)](https://php.net)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
