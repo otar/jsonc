@@ -36,13 +36,7 @@ class JSONC
             $jsonc = substr($jsonc, 3);
         }
 
-        // Pass 1: Remove comments
-        $json = self::removeComments($jsonc);
-
-        // Pass 2: Remove trailing commas
-        $json = self::removeTrailingCommas($json);
-
-        return $json;
+        return self::processInput($jsonc);
     }
 
     /**
@@ -71,20 +65,20 @@ class JSONC
     }
 
     /**
-     * Removes comments from JSONC string while preserving strings
+     * Processes JSONC string in a single pass: removes comments and trailing commas
      *
-     * Uses a state machine to track context and avoid removing
-     * comment-like syntax inside string values.
+     * Uses a state machine to track context, skipping comment content and
+     * dropping trailing commas via a comment-aware lookahead.
      *
-     * @param string $input JSONC string with comments
-     * @return string JSON string without comments
+     * @param string $input JSONC string after null-byte and BOM removal
+     * @return string Clean JSON string, or an error sentinel on unclosed constructs
      */
-    private static function removeComments(string $input): string
+    private static function processInput(string $input): string
     {
-        $state = ParserState::Normal;
-        $result = '';
+        $result = [];
+        $state  = ParserState::Normal;
         $length = strlen($input);
-        $i = 0;
+        $i      = 0;
 
         while ($i < $length) {
             $char = $input[$i];
@@ -94,20 +88,63 @@ class JSONC
                 case ParserState::Normal:
                     if ($char === '"') {
                         $state = ParserState::InString;
-                        $result .= $char;
+                        $result[] = $char;
                     } elseif ($char === '/' && $next === '/') {
                         $state = ParserState::SingleLineComment;
                         $i++; // Skip second '/'
                     } elseif ($char === '/' && $next === '*') {
                         $state = ParserState::MultiLineComment;
                         $i++; // Skip '*'
+                    } elseif ($char === ',') {
+                        // Comment-aware lookahead to detect trailing commas
+                        $j = $i + 1;
+                        $skipped = [];
+
+                        while ($j < $length) {
+                            $c = $input[$j];
+                            $n = ($j + 1 < $length) ? $input[$j + 1] : null;
+
+                            if ($c === ' ' || $c === "\t" || $c === "\n" || $c === "\r") {
+                                $skipped[] = $c;
+                                $j++;
+                            } elseif ($c === '/' && $n === '/') {
+                                // Skip single-line comment body; newline is picked up as whitespace
+                                $j += 2;
+                                while ($j < $length && $input[$j] !== "\n" && $input[$j] !== "\r") {
+                                    $j++;
+                                }
+                            } elseif ($c === '/' && $n === '*') {
+                                // Skip block comment
+                                $j += 2;
+                                while ($j < $length) {
+                                    if ($input[$j] === '*' && ($j + 1 < $length) && $input[$j + 1] === '/') {
+                                        $j += 2;
+                                        break;
+                                    }
+                                    $j++;
+                                }
+                            } else {
+                                break;
+                            }
+                        }
+
+                        if ($j < $length && ($input[$j] === '}' || $input[$j] === ']')) {
+                            // Trailing comma: drop it, emit accumulated whitespace, jump to closing bracket
+                            foreach ($skipped as $ws) {
+                                $result[] = $ws;
+                            }
+                            $i = $j - 1; // Main loop $i++ lands on closing bracket
+                        } else {
+                            // Not a trailing comma, keep it
+                            $result[] = $char;
+                        }
                     } else {
-                        $result .= $char;
+                        $result[] = $char;
                     }
                     break;
 
                 case ParserState::InString:
-                    $result .= $char;
+                    $result[] = $char;
                     if ($char === '\\') {
                         $state = ParserState::InStringEscape;
                     } elseif ($char === '"') {
@@ -116,13 +153,13 @@ class JSONC
                     break;
 
                 case ParserState::InStringEscape:
-                    $result .= $char;
+                    $result[] = $char;
                     $state = ParserState::InString;
                     break;
 
                 case ParserState::SingleLineComment:
                     if ($char === "\n" || $char === "\r") {
-                        $result .= $char; // Preserve line breaks
+                        $result[] = $char; // Preserve line breaks
                         $state = ParserState::Normal;
                     }
                     // Otherwise skip character (it's part of the comment)
@@ -140,94 +177,13 @@ class JSONC
             $i++;
         }
 
-        // Validate that we ended in a valid state
-        // This catches unclosed strings, unclosed escape sequences and unclosed comments
-        // Note: This validation protects both removeComments() and removeTrailingCommas()
-        if ($state !== ParserState::Normal && $state !== ParserState::SingleLineComment) {
-            // Return invalid JSON that will fail in json_decode()
-            return '{JSONC_PARSE_ERROR: unclosed string or comment}';
-        }
+        // Validate final state and return specific error sentinels for unclosed constructs
+        $error = match ($state) {
+            ParserState::Normal, ParserState::SingleLineComment => null,
+            ParserState::MultiLineComment => '{JSONC_PARSE_ERROR: unclosed block comment}',
+            ParserState::InString, ParserState::InStringEscape => '{JSONC_PARSE_ERROR: unclosed string literal}',
+        };
 
-        return $result;
-    }
-
-    /**
-     * Removes trailing commas from JSON string while preserving strings
-     *
-     * Uses a state machine to track context and only remove commas
-     * that appear before closing brackets/braces.
-     *
-     * @param string $input JSON string with potential trailing commas
-     * @return string JSON string without trailing commas
-     */
-    private static function removeTrailingCommas(string $input): string
-    {
-        $state = ParserState::Normal;
-        $result = '';
-        $length = strlen($input);
-        $i = 0;
-
-        while ($i < $length) {
-            $char = $input[$i];
-
-            switch ($state) {
-                case ParserState::Normal:
-                    if ($char === '"') {
-                        $state = ParserState::InString;
-                        $result .= $char;
-                    } elseif ($char === ',') {
-                        // Look ahead to find next non-whitespace character
-                        $j = $i + 1;
-                        $whitespace = '';
-
-                        while ($j < $length && self::isWhitespace($input[$j])) {
-                            $whitespace .= $input[$j];
-                            $j++;
-                        }
-
-                        // Check if comma is trailing (before } or ])
-                        if ($j < $length && ($input[$j] === '}' || $input[$j] === ']')) {
-                            // Skip comma but preserve whitespace
-                            $result .= $whitespace;
-                            $i = $j - 1; // Will be incremented at end of loop
-                        } else {
-                            // Not a trailing comma, keep it
-                            $result .= $char;
-                        }
-                    } else {
-                        $result .= $char;
-                    }
-                    break;
-
-                case ParserState::InString:
-                    $result .= $char;
-                    if ($char === '\\') {
-                        $state = ParserState::InStringEscape;
-                    } elseif ($char === '"') {
-                        $state = ParserState::Normal;
-                    }
-                    break;
-
-                case ParserState::InStringEscape:
-                    $result .= $char;
-                    $state = ParserState::InString;
-                    break;
-            }
-
-            $i++;
-        }
-
-        return $result;
-    }
-
-    /**
-     * Checks if a character is whitespace
-     *
-     * @param string $char Single character to check
-     * @return bool True if whitespace
-     */
-    private static function isWhitespace(string $char): bool
-    {
-        return in_array($char, [' ', "\t", "\n", "\r"], true);
+        return $error ?? implode('', $result);
     }
 }
