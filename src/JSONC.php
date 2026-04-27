@@ -29,7 +29,9 @@ class JSONC
     public static function parse(string $jsonc): string
     {
         // Remove null bytes for security
-        $jsonc = str_replace("\x00", '', $jsonc);
+        if (str_contains($jsonc, "\x00")) {
+            $jsonc = str_replace("\x00", '', $jsonc);
+        }
 
         // Strip UTF-8 BOM if present
         if (str_starts_with($jsonc, "\xEF\xBB\xBF")) {
@@ -81,11 +83,21 @@ class JSONC
         $i      = 0;
 
         while ($i < $length) {
-            $char = $input[$i];
-            $next = ($i + 1 < $length) ? $input[$i + 1] : null;
-
             switch ($state) {
                 case ParserState::Normal:
+                    $spanLength = strcspn($input, '"/,', $i);
+                    if ($spanLength > 0) {
+                        $result .= substr($input, $i, $spanLength);
+                        $i += $spanLength;
+
+                        if ($i >= $length) {
+                            break 2;
+                        }
+                    }
+
+                    $char = $input[$i];
+                    $next = ($i + 1 < $length) ? $input[$i + 1] : null;
+
                     if ($char === '"') {
                         $state = ParserState::InString;
                         $result .= $char;
@@ -139,6 +151,18 @@ class JSONC
                     break;
 
                 case ParserState::InString:
+                    $spanLength = strcspn($input, "\\\"", $i);
+                    if ($spanLength > 0) {
+                        $result .= substr($input, $i, $spanLength);
+                        $i += $spanLength;
+
+                        if ($i >= $length) {
+                            break 2;
+                        }
+                    }
+
+                    $char = $input[$i];
+
                     $result .= $char;
                     if ($char === '\\') {
                         $state = ParserState::InStringEscape;
@@ -148,6 +172,8 @@ class JSONC
                     break;
 
                 case ParserState::InStringEscape:
+                    $char = $input[$i];
+
                     $result .= $char;
                     $state = ParserState::InString;
                     break;

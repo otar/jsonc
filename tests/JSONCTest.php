@@ -237,6 +237,66 @@ class JSONCTest extends TestCase
     }
 
     /**
+     * Test parse() copies a normal-state span through end-of-input
+     */
+    public function testParseCopiesNormalSpanToEOF(): void
+    {
+        $this->assertSame('true', JSONC::parse('true'));
+    }
+
+    /**
+     * Test parse() copies a normal-state span before entering a string
+     */
+    public function testParseCopiesNormalSpanBeforeString(): void
+    {
+        $jsonc = '{"key":"value"}';
+
+        $this->assertSame($jsonc, JSONC::parse($jsonc));
+    }
+
+    /**
+     * Test parse() copies string spans before escapes and closing quotes
+     */
+    public function testParseCopiesStringSpansAroundEscapesAndQuotes(): void
+    {
+        $jsonc = '{"text":"alpha\"beta"}';
+
+        $this->assertSame($jsonc, JSONC::parse($jsonc));
+        $this->assertSame(['text' => 'alpha"beta'], JSONC::decode($jsonc, true));
+    }
+
+    /**
+     * Test parse() handles adjacent special tokens without span content
+     */
+    public function testParseHandlesAdjacentSpecialTokens(): void
+    {
+        $jsonc = '[/**/"a",/**/"b"]';
+
+        $this->assertSame('["a","b"]', JSONC::parse($jsonc));
+        $this->assertSame(['a', 'b'], JSONC::decode($jsonc, true));
+    }
+
+    /**
+     * Test parse() path without null bytes
+     */
+    public function testParseWithoutNullBytes(): void
+    {
+        $jsonc = '{"plain":true}';
+
+        $this->assertSame($jsonc, JSONC::parse($jsonc));
+    }
+
+    /**
+     * Test parse() strips null bytes when present
+     */
+    public function testParseWithNullBytes(): void
+    {
+        $jsonc = "{\"ke\x00y\":\"va\x00lue\"}";
+
+        $this->assertSame('{"key":"value"}', JSONC::parse($jsonc));
+    }
+
+    /**
      * Test parse() preserves CRLF line endings when removing single-line comments
      */
     public function testParsePreservesCRLFWhenSkippingSingleLineComments(): void
@@ -1438,8 +1498,8 @@ class JSONCTest extends TestCase
         $result = JSONC::decode($jsonc, true);
         $duration = microtime(true) - $start;
 
-        // Should complete in reasonable time (< 2 seconds)
-        $this->assertLessThan(2.0, $duration, "Parsing took too long: {$duration}s");
+        // Should complete quickly with span-copying (< 1 second)
+        $this->assertLessThan(1.0, $duration, "Parsing took too long: {$duration}s");
 
         $this->assertNotNull($result);
         $this->assertEquals(['a' => 1], $result);
@@ -1461,11 +1521,30 @@ class JSONCTest extends TestCase
         $result = JSONC::decode($jsonc, true);
         $duration = microtime(true) - $start;
 
-        // Should complete in reasonable time (< 2 seconds)
-        $this->assertLessThan(2.0, $duration, "Parsing took too long: {$duration}s");
+        // Should complete quickly with span-copying (< 1 second)
+        $this->assertLessThan(1.0, $duration, "Parsing took too long: {$duration}s");
 
         $this->assertNotNull($result);
         $this->assertCount(10000, $result);
+    }
+
+    /**
+     * Large valid JSON with many normal commas
+     */
+    public function testPerformanceLargeValidJsonWithManyNormalCommas(): void
+    {
+        // 50,000 normal commas that should be preserved
+        $jsonc = '[' . implode(',', range(1, 50000)) . ']';
+
+        $start = microtime(true);
+        $result = JSONC::decode($jsonc, true);
+        $duration = microtime(true) - $start;
+
+        // Normal comma handling should stay fast with span-copying
+        $this->assertLessThan(1.0, $duration, "Parsing took too long: {$duration}s");
+
+        $this->assertNotNull($result);
+        $this->assertCount(50000, $result);
     }
 
     /**
@@ -1502,8 +1581,8 @@ class JSONCTest extends TestCase
         $result = JSONC::decode($jsonc, true);
         $duration = microtime(true) - $start;
 
-        // Should handle long strings efficiently (< 2 seconds)
-        $this->assertLessThan(2.0, $duration, "Parsing took too long: {$duration}s");
+        // Should handle long strings efficiently with span-copying (< 1 second)
+        $this->assertLessThan(1.0, $duration, "Parsing took too long: {$duration}s");
 
         $this->assertNotNull($result);
         $this->assertEquals($longString, $result['key']);
