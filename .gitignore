@@ -16,3 +16,9 @@ composer.lock
 # OS
 .DS_Store
 Thumbs.db
+
+# Tests
+coverage.xml
+
+# Coding Agents
+.claude

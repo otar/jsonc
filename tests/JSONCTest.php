@@ -237,6 +237,30 @@ class JSONCTest extends TestCase
     }
 
     /**
+     * Test parse() preserves CRLF line endings when removing single-line comments
+     */
+    public function testParsePreservesCRLFWhenSkippingSingleLineComments(): void
+    {
+        $jsonc = "{\r\n// comment\r\n\"key\":\"value\"\r\n}";
+        $json = JSONC::parse($jsonc);
+
+        $this->assertSame("{\r\n\r\n\"key\":\"value\"\r\n}", $json);
+        $this->assertSame(['key' => 'value'], json_decode($json, true));
+    }
+
+    /**
+     * Test trailing comma lookahead skips comments before closing brackets
+     */
+    public function testTrailingCommaLookaheadSkipsComments(): void
+    {
+        $jsonc = '{"a": 1, /* block */ // line
+}';
+        $result = JSONC::decode($jsonc, true);
+
+        $this->assertSame(['a' => 1], $result);
+    }
+
+    /**
      * Test invalid JSON returns null
      */
     public function testInvalidJSONReturnsNull(): void

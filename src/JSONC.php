@@ -75,7 +75,7 @@ class JSONC
      */
     private static function processInput(string $input): string
     {
-        $result = [];
+        $result = '';
         $state  = ParserState::Normal;
         $length = strlen($input);
         $i      = 0;
@@ -88,7 +88,7 @@ class JSONC
                 case ParserState::Normal:
                     if ($char === '"') {
                         $state = ParserState::InString;
-                        $result[] = $char;
+                        $result .= $char;
                     } elseif ($char === '/' && $next === '/') {
                         $state = ParserState::SingleLineComment;
                         $i++; // Skip second '/'
@@ -98,31 +98,28 @@ class JSONC
                     } elseif ($char === ',') {
                         // Comment-aware lookahead to detect trailing commas
                         $j = $i + 1;
-                        $skipped = [];
+                        $skipped = '';
 
                         while ($j < $length) {
                             $c = $input[$j];
                             $n = ($j + 1 < $length) ? $input[$j + 1] : null;
 
                             if ($c === ' ' || $c === "\t" || $c === "\n" || $c === "\r") {
-                                $skipped[] = $c;
-                                $j++;
+                                $whitespaceLength = strspn($input, " \t\n\r", $j);
+                                $skipped .= substr($input, $j, $whitespaceLength);
+                                $j += $whitespaceLength;
                             } elseif ($c === '/' && $n === '/') {
                                 // Skip single-line comment body; newline is picked up as whitespace
                                 $j += 2;
-                                while ($j < $length && $input[$j] !== "\n" && $input[$j] !== "\r") {
-                                    $j++;
-                                }
+                                $j += strcspn($input, "\n\r", $j);
                             } elseif ($c === '/' && $n === '*') {
                                 // Skip block comment
-                                $j += 2;
-                                while ($j < $length) {
-                                    if ($input[$j] === '*' && ($j + 1 < $length) && $input[$j + 1] === '/') {
-                                        $j += 2;
-                                        break;
-                                    }
-                                    $j++;
+                                $commentEnd = strpos($input, '*/', $j + 2);
+                                if ($commentEnd === false) {
+                                    $j = $length;
+                                    break;
                                 }
+                                $j = $commentEnd + 2;
                             } else {
                                 break;
                             }
@@ -130,21 +127,19 @@ class JSONC
 
                         if ($j < $length && ($input[$j] === '}' || $input[$j] === ']')) {
                             // Trailing comma: drop it, emit accumulated whitespace, jump to closing bracket
-                            foreach ($skipped as $ws) {
-                                $result[] = $ws;
-                            }
+                            $result .= $skipped;
                             $i = $j - 1; // Main loop $i++ lands on closing bracket
                         } else {
                             // Not a trailing comma, keep it
-                            $result[] = $char;
+                            $result .= $char;
                         }
                     } else {
-                        $result[] = $char;
+                        $result .= $char;
                     }
                     break;
 
                 case ParserState::InString:
-                    $result[] = $char;
+                    $result .= $char;
                     if ($char === '\\') {
                         $state = ParserState::InStringEscape;
                     } elseif ($char === '"') {
@@ -153,24 +148,29 @@ class JSONC
                     break;
 
                 case ParserState::InStringEscape:
-                    $result[] = $char;
+                    $result .= $char;
                     $state = ParserState::InString;
                     break;
 
                 case ParserState::SingleLineComment:
-                    if ($char === "\n" || $char === "\r") {
-                        $result[] = $char; // Preserve line breaks
+                    $lineEnd = $i + strcspn($input, "\n\r", $i);
+                    if ($lineEnd < $length) {
+                        $result .= $input[$lineEnd]; // Preserve line breaks
                         $state = ParserState::Normal;
+                        $i = $lineEnd;
+                    } else {
+                        $i = $length;
                     }
-                    // Otherwise skip character (it's part of the comment)
                     break;
 
                 case ParserState::MultiLineComment:
-                    if ($char === '*' && $next === '/') {
-                        $i++; // Skip '/'
+                    $commentEnd = strpos($input, '*/', $i);
+                    if ($commentEnd !== false) {
+                        $i = $commentEnd + 1; // Main loop $i++ lands after '/'
                         $state = ParserState::Normal;
+                    } else {
+                        $i = $length;
                     }
-                    // Otherwise skip character (it's part of the comment)
                     break;
             }
 
@@ -184,6 +184,6 @@ class JSONC
             ParserState::InString, ParserState::InStringEscape => '{JSONC_PARSE_ERROR: unclosed string literal}',
         };
 
-        return $error ?? implode('', $result);
+        return $error ?? $result;
     }
 }
