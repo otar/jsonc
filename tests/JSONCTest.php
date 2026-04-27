@@ -261,6 +261,18 @@ class JSONCTest extends TestCase
     }
 
     /**
+     * Test trailing comma lookahead handles unclosed block comments
+     */
+    public function testTrailingCommaLookaheadHandlesUnclosedBlockComment(): void
+    {
+        $jsonc = '{"a": 1, /* unterminated';
+        $result = JSONC::decode($jsonc, true);
+
+        $this->assertNull($result);
+        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
      * Test invalid JSON returns null
      */
     public function testInvalidJSONReturnsNull(): void
