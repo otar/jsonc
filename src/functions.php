@@ -10,10 +10,7 @@ use Otar\JSONC;
  * Provides a procedural interface similar to json_decode().
  */
 
-/**
- * @codeCoverageIgnore
- */
-if (!function_exists('jsonc_decode')) {
+if (!function_exists('jsonc_decode')) { // @codeCoverageIgnore
     /**
      * Decodes a JSONC string
      *
