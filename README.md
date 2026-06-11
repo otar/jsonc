@@ -11,11 +11,12 @@ A production-ready PHP library for parsing JSONC (JSON with Comments) format wit
 
 - **Single-line comments** (`//`) and **multi-line comments** (`/* */`)
 - **Trailing commas** in objects and arrays
-- **Drop-in replacement** for `json_decode()`
+- **Drop-in replacement** for `json_decode()` — same signature, same error behavior, verified by a differential test suite
 - **Edge case handling**: Preserves strings with comment syntax, escaped characters, Unicode
-- **Security hardening**: UTF-8 BOM removal, null byte prevention, unclosed string/comment validation
+- **Strict by default**: malformed input (raw control bytes, unclosed strings or comments) is rejected like native `json_decode()` does — never silently sanitized
+- **Fast**: plain JSON takes a native `json_decode()` fast path; JSONC goes through a single-pass scanner
 - **Zero dependencies**: Uses native PHP JSON extension
-- **Well tested**: 100+ tests with 100% code coverage
+- **Well tested**: 150+ tests with 100% code coverage, PHPStan at max level
 
 ## Installation
 
@@ -63,7 +64,7 @@ use Otar\JSONC;
 
 $jsonc = '{/* comment */"key": "value",}';
 $json = JSONC::parse($jsonc);
-// '{"key": "value"}'
+// '{ "key": "value"}' — comments become a space, trailing commas are dropped
 
 // Now you can use with standard json_decode
 $data = json_decode($json, true);
@@ -92,13 +93,15 @@ Parses JSONC string and returns cleaned JSON string (without comments and traili
 public static function parse(string $jsonc): string
 ```
 
+Throws `Otar\JsoncSyntaxException` when the input ends inside an unclosed string literal or block comment — it never returns invalid JSON.
+
 ### `jsonc_decode()`
 
 Global function alias for `JSONC::decode()`.
 
 ## Error Handling
 
-The library uses native PHP error functions:
+`decode()` follows `json_decode()` exactly: invalid input returns `null` and sets the native error state.
 
 ```php
 $invalidJsonc = '{invalid json}';
@@ -108,6 +111,30 @@ if ($result === null && json_last_error() !== JSON_ERROR_NONE) {
     echo 'Parse error: ' . json_last_error_msg();
 }
 ```
+
+With `JSON_THROW_ON_ERROR` it throws instead. Unclosed JSONC constructs surface as `Otar\JsoncSyntaxException` — a `JsonException` subclass that reports where the construct opened:
+
+```php
+use Otar\JsoncSyntaxException;
+
+try {
+    JSONC::decode('{"a": 1, /* unterminated', flags: JSON_THROW_ON_ERROR);
+} catch (JsoncSyntaxException $e) {
+    echo $e->getMessage(); // Unclosed block comment starting at offset 9
+    $e->getOffset();       // 9
+} catch (JsonException $e) {
+    // any other JSON syntax error
+}
+```
+
+`JSONC::parse()` always throws `JsoncSyntaxException` for unclosed constructs, with or without flags.
+
+### Differences from `json_decode()`
+
+- A leading UTF-8 BOM is tolerated and stripped (native `json_decode()` rejects it) — JSONC config files frequently carry one.
+- Comments and trailing commas are accepted.
+- Everything else matches native behavior, including `json_last_error()` codes.
+- `json_last_error()` is only meaningful after `decode()`; `parse()` may probe the input internally, which writes the global JSON error state.
 
 ## Requirements
 
@@ -122,6 +149,12 @@ composer test
 
 # Run tests with coverage
 composer test-coverage
+
+# Static analysis (PHPStan, level max)
+composer phpstan
+
+# Micro-benchmark
+composer bench
 ```
 
 ## License

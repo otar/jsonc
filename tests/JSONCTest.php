@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Otar\Tests;
 
+use JsonException;
 use Otar\JSONC;
+use Otar\JsoncSyntaxException;
 use PHPUnit\Framework\TestCase;
 
 class JSONCTest extends TestCase
@@ -267,12 +269,15 @@ class JSONCTest extends TestCase
 
     /**
      * Test parse() handles adjacent special tokens without span content
+     *
+     * Each block comment is replaced by a single space so it keeps acting
+     * as a token separator.
      */
     public function testParseHandlesAdjacentSpecialTokens(): void
     {
         $jsonc = '[/**/"a",/**/"b"]';
 
-        $this->assertSame('["a","b"]', JSONC::parse($jsonc));
+        $this->assertSame('[ "a", "b"]', JSONC::parse($jsonc));
         $this->assertSame(['a', 'b'], JSONC::decode($jsonc, true));
     }
 
@@ -287,13 +292,20 @@ class JSONCTest extends TestCase
     }
 
     /**
-     * Test parse() strips null bytes when present
+     * Test parse() passes raw null bytes through untouched
+     *
+     * Sanitizing them would silently change document structure; instead they
+     * reach json_decode(), which rejects raw control characters in strings
+     * exactly as it does for plain JSON.
      */
-    public function testParseWithNullBytes(): void
+    public function testParsePreservesNullBytes(): void
     {
         $jsonc = "{\"ke\x00y\":\"va\x00lue\"}";
 
-        $this->assertSame('{"key":"value"}', JSONC::parse($jsonc));
+        $this->assertSame($jsonc, JSONC::parse($jsonc));
+
+        json_decode(JSONC::parse($jsonc));
+        $this->assertSame(JSON_ERROR_CTRL_CHAR, json_last_error());
     }
 
     /**
@@ -741,9 +753,9 @@ class JSONCTest extends TestCase
     {
         $jsonc = "{\"key\": \"val\x00ue\"}";
         $result = JSONC::decode($jsonc, true);
-        // Should strip null bytes and parse successfully
-        $this->assertNotNull($result);
-        $this->assertEquals('value', $result['key']);
+        // Raw null bytes are rejected, matching native json_decode behavior
+        $this->assertNull($result);
+        $this->assertSame(JSON_ERROR_CTRL_CHAR, json_last_error());
     }
 
     /**
@@ -943,75 +955,66 @@ class JSONCTest extends TestCase
     }
 
     /**
-     * Null byte before BOM (order of operations)
-     * The BOM check happens before null byte removal, so if there's a null byte
-     * before the BOM, the BOM won't be detected and will remain in the output.
+     * Null byte before BOM is rejected
+     *
+     * The input does not start with a BOM (its first byte is a null byte),
+     * so nothing is stripped and json_decode() rejects the raw control
+     * character — the same outcome native json_decode() produces.
      */
-    public function testBugNullByteBeforeBOM(): void
+    public function testNullByteBeforeBOMIsRejected(): void
     {
         $jsonc = "\x00\xEF\xBB\xBF{\"key\": \"value\"}";
         $result = JSONC::decode($jsonc, true);
 
-        // If BOM is properly removed, this should parse correctly
-        // If BOM remains (bug), json_decode will likely fail
-        $this->assertNotNull($result, "Parser should handle null byte before BOM");
-        $this->assertEquals(['key' => 'value'], $result);
+        $this->assertNull($result);
+        $this->assertSame(JSON_ERROR_CTRL_CHAR, json_last_error());
     }
 
     /**
-     * Null byte in comment marker (creates comment after sanitization)
-     * If there's a null byte between the two slashes, it's not a comment before sanitization.
-     * After null removal, it becomes a comment, changing the parsing behavior.
+     * Null byte between slashes does not create a comment marker
+     *
+     * "/" + "\x00" + "/" is not a comment. Because null bytes are no longer
+     * sanitized away, the sequence passes through verbatim and json_decode()
+     * rejects the trailing garbage after the first object.
      */
-    public function testBugNullByteInCommentMarker(): void
+    public function testNullByteInCommentMarkerIsNotAComment(): void
     {
-        // Null byte between slashes: "/" + "\x00" + "/" = not a comment initially
-        // After null removal: "//" = comment!
         $jsonc = "{\"a\": 1}/\x00/ comment } {\"b\": 2}";
         $result = JSONC::decode($jsonc, true);
 
-        // Expected: If bug exists, "comment } {\"b\": 2}" becomes a comment
-        // Result would be just {"a": 1} (invalid JSON - missing closing brace)
-        // If no bug: /\x00/ is kept, becomes //, making everything after it a comment
-
-        // This test verifies this behavior
-        if ($result !== null && isset($result['a'])) {
-            // Null byte turned non-comment into comment
-            $this->assertEquals(['a' => 1], $result);
-            $this->assertArrayNotHasKey('b', $result, "Second object should be commented out due to null byte creating comment marker");
-        } else {
-            $this->fail("Unexpected parsing result");
-        }
+        $this->assertNull($result);
+        $this->assertSame(JSON_ERROR_SYNTAX, json_last_error());
     }
 
     /**
-     * Null byte splitting multi-line comment start
+     * Null byte splitting a multi-line comment start marker
+     *
+     * "/" + "\x00" + "*" does not open a block comment, so the content
+     * passes through verbatim and json_decode() rejects it.
      */
-    public function testBugNullByteSplittingMultiLineCommentStart(): void
+    public function testNullByteSplittingMultiLineCommentStart(): void
     {
         $jsonc = "{/\x00* not a comment */\"key\": \"value\"}";
         $result = JSONC::decode($jsonc, true);
 
-        // After null removal: "{/* not a comment */\"key\": \"value\"}"
-        // The /* */ becomes a comment, removing " not a comment "
-        // Result: "{\"key\": \"value\"}"
-        $this->assertNotNull($result);
-        $this->assertEquals(['key' => 'value'], $result);
+        $this->assertNull($result);
+        $this->assertSame(JSON_ERROR_SYNTAX, json_last_error());
     }
 
     /**
-     * Null byte splitting multi-line comment end
+     * Null byte splitting a multi-line comment end marker
+     *
+     * "*" + "\x00" + "/" does not close the block comment — it is ordinary
+     * comment content — so the comment runs on to the real close marker at
+     * the end of input and the document decodes successfully.
      */
-    public function testBugNullByteSplittingMultiLineCommentEnd(): void
+    public function testNullByteSplittingMultiLineCommentEnd(): void
     {
         $jsonc = "{\"key\": \"value\"} /* comment *\x00/ still comment? */";
         $result = JSONC::decode($jsonc, true);
 
-        // After null removal: "{\"key\": \"value\"} /* comment */ still comment? */"
-        // First */ closes the comment, " still comment? */" remains
-        // Invalid JSON after preprocessing
-        $this->assertNull($result, "Should produce invalid JSON");
-        $this->assertNotEquals(JSON_ERROR_NONE, json_last_error());
+        $this->assertSame(['key' => 'value'], $result);
+        $this->assertSame(JSON_ERROR_NONE, json_last_error());
     }
 
     /**
@@ -1586,5 +1589,180 @@ class JSONCTest extends TestCase
 
         $this->assertNotNull($result);
         $this->assertEquals($longString, $result['key']);
+    }
+
+    /**
+     * Block comments act as token separators (regression for token fusion)
+     *
+     * Removing a block comment without leaving a separator used to fuse the
+     * surrounding tokens: a comment between 1 and 2 produced the single
+     * token 12, which then decoded successfully.
+     */
+    public function testBlockCommentSeparatesTokens(): void
+    {
+        $this->assertSame('[1 2]', JSONC::parse('[1/**/2]'));
+
+        $this->assertNull(JSONC::decode('[1/**/2]'));
+        $this->assertSame(JSON_ERROR_SYNTAX, json_last_error());
+    }
+
+    /**
+     * A block comment splitting a keyword must not fuse it back together
+     */
+    public function testBlockCommentInsideKeywordIsRejected(): void
+    {
+        $this->assertNull(JSONC::decode('tr/**/ue'));
+        $this->assertSame(JSON_ERROR_SYNTAX, json_last_error());
+    }
+
+    /**
+     * parse() throws on an unclosed block comment, reporting where it opened
+     */
+    public function testParseThrowsOnUnclosedBlockComment(): void
+    {
+        try {
+            JSONC::parse('{"a": 1} /* unterminated');
+            $this->fail('Expected JsoncSyntaxException was not thrown');
+        } catch (JsoncSyntaxException $exception) {
+            $this->assertSame('Unclosed block comment starting at offset 9', $exception->getMessage());
+            $this->assertSame(9, $exception->getOffset());
+            $this->assertSame(JSON_ERROR_SYNTAX, $exception->getCode());
+        }
+    }
+
+    /**
+     * parse() throws on an unclosed string literal, reporting its opening quote
+     */
+    public function testParseThrowsOnUnclosedStringLiteral(): void
+    {
+        try {
+            JSONC::parse('{"key": "unclosed');
+            $this->fail('Expected JsoncSyntaxException was not thrown');
+        } catch (JsoncSyntaxException $exception) {
+            $this->assertSame('Unclosed string literal starting at offset 8', $exception->getMessage());
+            $this->assertSame(8, $exception->getOffset());
+        }
+    }
+
+    /**
+     * An unclosed string ending in a dangling escape reports the opening quote
+     */
+    public function testParseThrowsOnUnclosedStringEndingInEscape(): void
+    {
+        try {
+            JSONC::parse('"abc\\');
+            $this->fail('Expected JsoncSyntaxException was not thrown');
+        } catch (JsoncSyntaxException $exception) {
+            $this->assertSame(0, $exception->getOffset());
+            $this->assertStringContainsString('Unclosed string literal', $exception->getMessage());
+        }
+    }
+
+    /**
+     * JsoncSyntaxException is catchable as the native JsonException
+     */
+    public function testParseExceptionIsAJsonException(): void
+    {
+        $this->expectException(JsonException::class);
+
+        JSONC::parse('[1, /* never closed');
+    }
+
+    /**
+     * Exception offsets are absolute into the original input, BOM included
+     */
+    public function testParseExceptionOffsetIncludesBOM(): void
+    {
+        try {
+            JSONC::parse("\xEF\xBB\xBF\"abc");
+            $this->fail('Expected JsoncSyntaxException was not thrown');
+        } catch (JsoncSyntaxException $exception) {
+            $this->assertSame(3, $exception->getOffset());
+        }
+    }
+
+    /**
+     * decode() rethrows the JSONC-level exception in throw mode
+     */
+    public function testDecodeThrowModeRethrowsJsoncSyntaxException(): void
+    {
+        $this->expectException(JsoncSyntaxException::class);
+        $this->expectExceptionMessage('Unclosed block comment starting at offset 4');
+
+        JSONC::decode('[1, /* never closed', null, 512, JSON_THROW_ON_ERROR);
+    }
+
+    /**
+     * decode() lets the native JsonException through in throw mode
+     */
+    public function testDecodeThrowModeThrowsNativeJsonExceptionForInvalidJson(): void
+    {
+        $this->expectException(JsonException::class);
+
+        JSONC::decode('{invalid}', null, 512, JSON_THROW_ON_ERROR);
+    }
+
+    /**
+     * decode() in throw mode succeeds for plain JSON (fast path) and for
+     * JSONC needing the scanner fallback
+     */
+    public function testDecodeThrowModeSucceedsOnValidInput(): void
+    {
+        $this->assertSame(['a' => 1], JSONC::decode('{"a":1}', true, 512, JSON_THROW_ON_ERROR));
+        $this->assertSame(['a' => 1], JSONC::decode("{\"a\": 1, // comment\n}", true, 512, JSON_THROW_ON_ERROR));
+    }
+
+    /**
+     * decode('null') returns null with no error — the fast path must consult
+     * the error state, not the (legitimately null) return value
+     */
+    public function testDecodeNullLiteralLeavesNoError(): void
+    {
+        $this->assertNull(JSONC::decode('null'));
+        $this->assertSame(JSON_ERROR_NONE, json_last_error());
+    }
+
+    /**
+     * BOM followed by JSONC (not plain JSON) exercises the scanner fallback
+     * with a non-zero start offset
+     */
+    public function testDecodeBOMWithComments(): void
+    {
+        $jsonc = "\xEF\xBB\xBF{\"key\": \"value\", // comment\n}";
+        $result = JSONC::decode($jsonc, true);
+
+        $this->assertSame(['key' => 'value'], $result);
+    }
+
+    /**
+     * parse() drops the BOM while cleaning comment-bearing input
+     */
+    public function testParseBOMWithCommentsStripsBOM(): void
+    {
+        $jsonc = "\xEF\xBB\xBF{\"key\": \"value\", // comment\n}";
+
+        $this->assertSame("{\"key\": \"value\" \n}", JSONC::parse($jsonc));
+    }
+
+    /**
+     * Scanner-reaching variant of the normal-span-to-EOF path
+     *
+     * The leading comment makes json_validate() fail, so the input goes
+     * through the scanner and the final span ("true") runs to end of input.
+     */
+    public function testScannerCopiesNormalSpanToEOF(): void
+    {
+        $this->assertSame("\ntrue", JSONC::parse("//x\ntrue"));
+    }
+
+    /**
+     * Scanner-reaching variant for string span copies
+     *
+     * The trailing comma forces the scanner; the escaped quote exercises the
+     * InString and InStringEscape span handling.
+     */
+    public function testScannerCopiesStringSpans(): void
+    {
+        $this->assertSame('{"text":"alpha\"beta"}', JSONC::parse('{"text":"alpha\"beta",}'));
     }
 }

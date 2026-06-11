@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        php: ['8.1', '8.2', '8.3', '8.4']
+        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
 
     steps:
       - name: Checkout code
@@ -37,11 +37,13 @@ jobs:
         uses: actions/cache@v3
         with:
           path: ${{ steps.composer-cache.outputs.dir }}
-          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
-          restore-keys: ${{ runner.os }}-composer-
+          key: ${{ runner.os }}-composer-${{ matrix.php }}-${{ hashFiles('**/composer.json') }}
+          restore-keys: ${{ runner.os }}-composer-${{ matrix.php }}-
 
+      # composer update (not install): each PHP version resolves its own
+      # compatible dependency set, e.g. PHPUnit 10 on 8.1 and 12 on 8.3+
       - name: Install dependencies
-        run: composer install --prefer-dist --no-progress --no-suggest
+        run: composer update --prefer-dist --no-progress
 
       - name: Run tests (without coverage)
         if: matrix.php != '8.4'
@@ -60,3 +62,25 @@ jobs:
           verbose: true
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  static-analysis:
+    name: PHPStan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: json
+          coverage: none
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-progress
+
+      - name: Run PHPStan
+        run: composer phpstan

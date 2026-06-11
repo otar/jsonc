@@ -1,0 +1,12 @@
+parameters:
+    level: max
+    paths:
+        - src
+        - tests
+    ignoreErrors:
+        # Tests intentionally feed decode()'s mixed return into array offsets
+        # and typed assertion parameters; the runtime assertions cover them
+        - identifier: offsetAccess.nonOffsetAccessible
+          path: tests/*
+        - identifier: argument.type
+          path: tests/*
