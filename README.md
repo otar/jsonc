@@ -1,6 +1,6 @@
 # otar/jsonc
 
-A production-ready PHP library for parsing JSONC (JSON with Comments) format with drop-in compatibility for `json_decode()`.
+A production-ready PHP library for parsing [JSONC (JSON with Comments)](https://jsonc.org/) format with drop-in compatibility for `json_decode()`.
 
 [![CI](https://github.com/otar/jsonc/actions/workflows/ci.yml/badge.svg)](https://github.com/otar/jsonc/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/otar/jsonc/branch/main/graph/badge.svg)](https://codecov.io/gh/otar/jsonc)
